@@ -1,0 +1,18 @@
+# catkin build artifacts
+/build/
+/devel/
+/install/
+/logs/
+/.catkin_tools/
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Original upstream git metadata of vendored packages (kept locally only)
+.git.upstream

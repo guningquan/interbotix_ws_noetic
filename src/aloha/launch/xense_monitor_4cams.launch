@@ -1,0 +1,4 @@
+<launch>
+  <!-- Subscriber-only monitor for the full-frame XENSE stream used by record/eval. -->
+  <node name="xense_image_monitor" pkg="main_code" type="image_monitor_4cams_4xense.py" output="screen" />
+</launch>

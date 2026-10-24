@@ -1,0 +1,296 @@
+<launch>
+
+  <!-- ===========================================================================
+       4-arm ALOHA teleop with 4 USB cameras + 4 XENSE tactile sensors: two
+       master arms puppeteering two puppet arms.
+
+       WHAT THIS STARTS
+         - 4x interbotix_xsarm_control (master_left, master_right, puppet_left,
+           puppet_right): joint_states, motor commands, robot_description, TF.
+         - 4x static TF broadcasters placing each arm's base_link in /world.
+         - 4x usb_cam_node (pkg usb_cam): the 4 cameras below.
+         - 1x xense_tactile_publisher (aloha/scripts/xense_tactile_publisher.py,
+           run through xense_tactile_runner.sh so it uses the lerobot conda env
+           that has xensesdk installed): the 4 XENSE tactile sensors below.
+         - 1x image_monitor (pkg main_code, source lives in the
+           tactile_aloha_monitor directory): a live 2x4 preview window,
+           cameras on top row, tactile on bottom row.
+
+       WHAT GETS PUBLISHED
+         Cameras, requested 60Hz, sensor_msgs/Image shape (480, 640, 3):
+           /usb_cam_high/image_raw
+           /usb_cam_low/image_raw
+           /usb_cam_left_wrist/image_raw
+           /usb_cam_right_wrist/image_raw
+
+         Tactile, per sensor (left_gripper_inner, left_gripper_outer, right_gripper_inner,
+         right_gripper_outer). <primary> is the primary_output arg below:
+         rectify (default), difference or depth.
+           /tactile/<name>/<primary> sensor_msgs/Image, native XENSE resolution,
+                                      no resize:
+                                        rectify     rgb8,  (700, 400, 3)
+                                        difference  rgb8,  (700, 400, 3)
+                                        depth       32FC1, (700, 400), mm
+                                      The SDK returns rectify/difference as
+                                      BGR; the publisher swaps them to RGB
+                                      before publishing. This is a low-rate
+                                      PREVIEW copy only, throttled by the
+                                      preview_every_n_frames param below - it
+                                      is not meant as a data source.
+           /tactile/<name>/raw       std_msgs/UInt8MultiArray, data =
+                                      pickle.dumps({"frames": {...}, "meta":
+                                      {...}}). Always publishes every
+                                      frame_rate cycle, real-time. "frames"
+                                      always has "<primary>" (same native shape
+                                      and dtype/RGB order as above) plus
+                                      whatever extra_outputs below selects:
+                                      rectify, difference, depth, force,
+                                      force_norm, force_resultant, marker2d,
+                                      mesh3d, mesh3d_init, mesh3d_flow,
+                                      timestamp. Empty (default) selection
+                                      means only <primary> is requested from
+                                      the SDK at all, not merely "read but not
+                                      published". <primary> and all extras are
+                                      read in ONE selectSensorInfo() call, so
+                                      everything in one message (and the
+                                      preview) is the same sensor frame. This
+                                      /raw topic, not the preview, is what any
+                                      recording/training subscriber should use.
+                                      "rectify" and "difference" are the only
+                                      colour images, so they are converted
+                                      BGR->RGB on the way out; every other
+                                      output is byte-for-byte what the SDK
+                                      returned (force/force_norm/mesh3d are
+                                      3-channel too, but those channels are
+                                      x/y/z, not colours, so they are never
+                                      swapped).
+
+         Pick the primary output and extras from the command line, e.g.:
+           roslaunch aloha 4arms_tactile_teleop.launch primary_output:=depth
+           roslaunch aloha 4arms_tactile_teleop.launch extra_outputs:="depth,force"
+           roslaunch aloha 4arms_tactile_teleop.launch primary_output:=depth extra_outputs:="rectify"
+
+       OUTPUT / LOGS
+         Every node here uses output="screen", so console output also lands in
+         ~/.ros/log/<run-id>/<node>-<n>.log. Notable lines to look for:
+           - xense_tactile_publisher: one "Connected XENSE sensor: <name>
+             (<serial>) -> .../<primary> (<primary>), .../raw (<raw contents>)"
+             line per sensor, plus the XENSE SDK's own "infer session using
+             GPU"/"using CPU" line (CPU there usually means onnxruntime-gpu's
+             CUDA execution provider failed to load - see the LD_LIBRARY_PATH
+             fix in xense_tactile_runner.sh).
+           - image_monitor: "Tactile /raw extras this run: ..." - it reads
+             xense_tactile_publisher's own primary_output and extra_outputs
+             params directly, so this always matches what is actually being
+             published.
+
+       PREVIEW WINDOW
+         image_monitor's 2x4 grid also draws a live "extras: ..." label on the
+         tactile row showing which /raw extras this run has enabled. Its
+         tactile row displays the /<primary> preview (throttled), never /raw -
+         it's a visual sanity check, not a substitute for subscribing to /raw
+         for real data. Tactile frames are shown unscaled but rotated 90° to
+         landscape, 700 wide x 400 high (tactile_rotation arg); cameras are
+         640x480. Only the window is rotated, never the published data. Cameras and rectify/difference are RGB (usb_cam rgb8,
+         tactile rgb8) and cv2.imshow wants BGR, so the monitor swaps channels
+         back before drawing - true colour, not a red/blue swap. depth is drawn
+         with a JET colormap, auto-scaled per frame (but never below 0.1 mm
+         full scale, so a resting gel stays dark blue), and each tactile
+         cell's label shows that sensor's current max depth in mm.
+       =========================================================================== -->
+
+  <arg name="robot_model_master"                default="wx250s"/>
+  <arg name="robot_model_puppet"                default="vx300s"/>
+
+  <arg name="base_link_master"                  default="base_link"/>
+  <arg name="base_link_puppet"                  default="base_link"/>
+
+  <arg name="master_modes_left"                 default="$(find aloha)/config/master_modes_left.yaml"/>
+  <arg name="puppet_modes_left"                 default="$(find aloha)/config/puppet_modes_left.yaml"/>
+  <arg name="master_modes_right"                default="$(find aloha)/config/master_modes_right.yaml"/>
+  <arg name="puppet_modes_right"                default="$(find aloha)/config/puppet_modes_right.yaml"/>
+
+  <arg name="launch_driver"                     default="true"/>
+  <arg name="use_sim"                           default="false"/>
+
+  <!-- Tactile always-on output: rectify (default), difference or depth. It is
+       always in /raw, and it is what /tactile/<name>/<primary_output> publishes
+       and what image_monitor shows. e.g.:
+         roslaunch aloha 4arms_tactile_teleop.launch primary_output:=depth -->
+  <arg name="primary_output"                    default="rectify"/>
+
+  <!-- Tactile /raw always includes primary_output. Comma-separated list of anything
+       else to also read from the XENSE SDK and bundle in, e.g. "depth,force". Valid:
+       rectify, difference, depth, force, force_norm, force_resultant, marker2d,
+       mesh3d, mesh3d_init, mesh3d_flow, timestamp (listing primary_output itself is
+       ignored). Empty (default) = primary_output only, none of the other SDK calls
+       happen. Override from the command line, e.g.:
+         roslaunch aloha 4arms_tactile_teleop.launch extra_outputs:="depth,force" -->
+  <arg name="extra_outputs"                     default=""/>
+
+  <!-- Preview window only (published data is untouched): which way image_monitor
+       turns the portrait 700x400 tactile frames to show them landscape (700 wide,
+       400 high): cw (default) or ccw. e.g.:
+         roslaunch aloha 4arms_tactile_teleop.launch tactile_rotation:=ccw -->
+  <arg name="tactile_rotation"                  default="cw"/>
+
+  <arg name="robot_name_master_left"            value="master_left"/>
+  <arg name="robot_name_puppet_left"            value="puppet_left"/>
+  <arg name="robot_name_master_right"           value="master_right"/>
+  <arg name="robot_name_puppet_right"           value="puppet_right"/>
+
+
+  <include if="$(arg launch_driver)" file="$(find interbotix_xsarm_control)/launch/xsarm_control.launch">
+    <arg name="robot_model"                       value="$(arg robot_model_master)"/>
+    <arg name="robot_name"                        value="$(arg robot_name_master_left)"/>
+    <arg name="base_link_frame"                   value="$(arg base_link_master)"/>
+    <arg name="use_world_frame"                   value="false"/>
+    <arg name="use_rviz"                          value="false"/>
+    <arg name="mode_configs"                      value="$(arg master_modes_left)"/>
+    <arg name="use_sim"                           value="$(arg use_sim)"/>
+  </include>
+
+  <include if="$(arg launch_driver)" file="$(find interbotix_xsarm_control)/launch/xsarm_control.launch">
+    <arg name="robot_model"                       value="$(arg robot_model_master)"/>
+    <arg name="robot_name"                        value="$(arg robot_name_master_right)"/>
+    <arg name="base_link_frame"                   value="$(arg base_link_master)"/>
+    <arg name="use_world_frame"                   value="false"/>
+    <arg name="use_rviz"                          value="false"/>
+    <arg name="mode_configs"                      value="$(arg master_modes_right)"/>
+    <arg name="use_sim"                           value="$(arg use_sim)"/>
+  </include>
+
+
+  <include if="$(arg launch_driver)" file="$(find interbotix_xsarm_control)/launch/xsarm_control.launch">
+    <arg name="robot_model"                       value="$(arg robot_model_puppet)"/>
+    <arg name="robot_name"                        value="$(arg robot_name_puppet_left)"/>
+    <arg name="base_link_frame"                   value="$(arg base_link_puppet)"/>
+    <arg name="use_world_frame"                   value="false"/>
+    <arg name="use_rviz"                          value="false"/>
+    <arg name="mode_configs"                      value="$(arg puppet_modes_left)"/>
+    <arg name="use_sim"                           value="$(arg use_sim)"/>
+  </include>
+
+  <include if="$(arg launch_driver)" file="$(find interbotix_xsarm_control)/launch/xsarm_control.launch">
+    <arg name="robot_model"                       value="$(arg robot_model_puppet)"/>
+    <arg name="robot_name"                        value="$(arg robot_name_puppet_right)"/>
+    <arg name="base_link_frame"                   value="$(arg base_link_puppet)"/>
+    <arg name="use_world_frame"                   value="false"/>
+    <arg name="use_rviz"                          value="false"/>
+    <arg name="mode_configs"                      value="$(arg puppet_modes_right)"/>
+    <arg name="use_sim"                           value="$(arg use_sim)"/>
+  </include>
+
+
+  <node
+    name="master_left_transform_broadcaster"
+    pkg="tf2_ros"
+    type="static_transform_publisher"
+    args="0 -0.25 0 0 0 0 /world /$(arg robot_name_master_left)/base_link"/>
+
+   <node
+    name="master_right_transform_broadcaster"
+    pkg="tf2_ros"
+    type="static_transform_publisher"
+    args="0 -0.25 0 0 0 0 /world /$(arg robot_name_master_right)/base_link"/>
+
+
+  <node
+    name="puppet_left_transform_broadcaster"
+    pkg="tf2_ros"
+    type="static_transform_publisher"
+    args="0 0.25 0 0 0 0 /world /$(arg robot_name_puppet_left)/base_link"/>
+
+  <node
+    name="puppet_right_transform_broadcaster"
+    pkg="tf2_ros"
+    type="static_transform_publisher"
+    args="0 0.25 0 0 0 0 /world /$(arg robot_name_puppet_right)/base_link"/>
+
+  <!-- ============================= -->
+  <!-- 4 USB cameras                 -->
+  <!-- ============================= -->
+
+  <node name="usb_cam_high" pkg="usb_cam" type="usb_cam_node" output="screen" >
+    <param name="video_device" value="/dev/CAM_HIGH" />
+    <param name="framerate" value="60" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="pixel_format" value="yuyv" />
+    <param name="camera_frame_id" value="usb_cam" />
+    <param name="io_method" value="mmap"/>
+    <param name="autofocus" value="false"/>
+    <param name="focus" value="5"/>
+    <param name="autoexposure" value="true"/>
+  </node>
+
+  <node name="usb_cam_low" pkg="usb_cam" type="usb_cam_node" output="screen" >
+    <param name="video_device" value="/dev/CAM_LOW" />
+    <param name="framerate" value="60" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="pixel_format" value="yuyv" />
+    <param name="camera_frame_id" value="usb_cam" />
+    <param name="io_method" value="mmap"/>
+    <param name="autofocus" value="false"/>
+    <param name="focus" value="35"/>
+    <param name="autoexposure" value="true"/>
+  </node>
+
+  <node name="usb_cam_left_wrist" pkg="usb_cam" type="usb_cam_node" output="screen" >
+    <param name="video_device" value="/dev/CAM_LEFT_WRIST" />
+    <param name="framerate" value="60" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="pixel_format" value="yuyv" />
+    <param name="camera_frame_id" value="usb_cam" />
+    <param name="io_method" value="mmap"/>
+    <param name="autofocus" value="false"/>
+    <param name="focus" value="40"/>
+    <param name="autoexposure" value="true"/>
+  </node>
+
+  <node name="usb_cam_right_wrist" pkg="usb_cam" type="usb_cam_node" output="screen" >
+    <param name="video_device" value="/dev/CAM_RIGHT_WRIST" />
+    <param name="framerate" value="60" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="pixel_format" value="yuyv" />
+    <param name="camera_frame_id" value="usb_cam" />
+    <param name="io_method" value="mmap"/>
+    <param name="autofocus" value="false"/>
+    <param name="focus" value="40"/>
+    <param name="autoexposure" value="true"/>
+  </node>
+
+  <!-- ============================= -->
+  <!-- 4 XENSE tactile sensors       -->
+  <!-- ============================= -->
+
+  <node name="xense_tactile_publisher" pkg="aloha" type="xense_tactile_runner.sh" output="screen">
+    <param name="use_gpu" value="true" />
+    <param name="frame_rate" value="60" />
+    <param name="async_poll_interval_s" value="0.0" />
+    <param name="async_max_frame_age_s" value="0.25" />
+    <!-- /raw (the full data used for recording) always publishes every frame_rate
+         cycle. /rectify (the monitor preview) only publishes every Nth cycle, e.g.
+         6 means ~10Hz preview at frame_rate=60; it's fine for it to lag. -->
+    <param name="preview_every_n_frames" value="2" />
+    <!-- See the primary_output arg doc above. image_monitor reads this param too. -->
+    <param name="primary_output" value="$(arg primary_output)" />
+    <!-- See the extra_outputs arg doc above -->
+    <param name="extra_outputs" value="$(arg extra_outputs)" />
+    <!-- Set mock to true to test without real XENSE hardware -->
+    <param name="mock" value="false" />
+  </node>
+
+  <!-- ============================= -->
+  <!-- Combined image monitor        -->
+  <!-- ============================= -->
+
+  <node name="image_monitor" pkg="main_code" type="image_monitor_4cams_4tactile.py" output="screen">
+    <!-- See the tactile_rotation arg doc above -->
+    <param name="tactile_rotation" value="$(arg tactile_rotation)" />
+  </node>
+
+</launch>

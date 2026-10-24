@@ -1,0 +1,33 @@
+<launch>
+
+  <!-- ===========================================================================
+       Single XENSE sensor test viewer. Publishes NO topics.
+
+       Opens one OpenCV window showing, side by side:
+           rectify | difference | depth (JET colormap, mm)
+       All three come from one selectSensorInfo() call, so they are always the
+       same sensor frame.
+
+       Keys in the window: r = reset reference image, q / ESC = quit.
+       Closing the window ends the whole roslaunch (required="true").
+
+       Usage:
+         roslaunch aloha xense_test.launch
+         roslaunch aloha xense_test.launch serial:=OG000614
+         roslaunch aloha xense_test.launch depth_max_mm:=1.0   (fixed colour scale)
+
+       Do not run this alongside 4arms_tactile_teleop.launch: that launch's
+       xense_tactile_publisher already holds every XENSE sensor open.
+       =========================================================================== -->
+
+  <arg name="serial"        default="OG000635"/>
+  <!-- Depth value (mm) shown as full red. 0 = auto-scale per frame (floor 0.1 mm). -->
+  <arg name="depth_max_mm"  default="0.0"/>
+
+  <node name="xense_test_viewer" pkg="aloha" type="xense_test_runner.sh" output="screen" required="true">
+    <param name="serial"        type="str"    value="$(arg serial)"/>
+    <param name="use_gpu"                     value="true"/>
+    <param name="depth_max_mm"  type="double" value="$(arg depth_max_mm)"/>
+  </node>
+
+</launch>

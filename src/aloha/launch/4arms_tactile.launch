@@ -1,0 +1,78 @@
+<launch>
+
+  <!-- ============================= -->
+  <!-- 4 USB cameras                 -->
+  <!-- ============================= -->
+
+  <node name="usb_cam_high" pkg="usb_cam" type="usb_cam_node" output="screen" >
+    <param name="video_device" value="/dev/CAM_HIGH" />
+    <param name="framerate" value="60" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="pixel_format" value="yuyv" />
+    <param name="camera_frame_id" value="usb_cam" />
+    <param name="io_method" value="mmap"/>
+    <param name="autofocus" value="false"/>
+    <param name="focus" value="5"/>
+    <param name="autoexposure" value="true"/>
+  </node>
+
+  <node name="usb_cam_low" pkg="usb_cam" type="usb_cam_node" output="screen" >
+    <param name="video_device" value="/dev/CAM_LOW" />
+    <param name="framerate" value="60" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="pixel_format" value="yuyv" />
+    <param name="camera_frame_id" value="usb_cam" />
+    <param name="io_method" value="mmap"/>
+    <param name="autofocus" value="false"/>
+    <param name="focus" value="35"/>
+    <param name="autoexposure" value="true"/>
+  </node>
+
+  <node name="usb_cam_left_wrist" pkg="usb_cam" type="usb_cam_node" output="screen" >
+    <param name="video_device" value="/dev/CAM_LEFT_WRIST" />
+    <param name="framerate" value="60" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="pixel_format" value="yuyv" />
+    <param name="camera_frame_id" value="usb_cam" />
+    <param name="io_method" value="mmap"/>
+    <param name="autofocus" value="false"/>
+    <param name="focus" value="40"/>
+    <param name="autoexposure" value="true"/>
+  </node>
+
+  <node name="usb_cam_right_wrist" pkg="usb_cam" type="usb_cam_node" output="screen" >
+    <param name="video_device" value="/dev/CAM_RIGHT_WRIST" />
+    <param name="framerate" value="60" />
+    <param name="image_width" value="640" />
+    <param name="image_height" value="480" />
+    <param name="pixel_format" value="yuyv" />
+    <param name="camera_frame_id" value="usb_cam" />
+    <param name="io_method" value="mmap"/>
+    <param name="autofocus" value="false"/>
+    <param name="focus" value="40"/>
+    <param name="autoexposure" value="true"/>
+  </node>
+
+  <!-- ============================= -->
+  <!-- 4 XENSE tactile sensors       -->
+  <!-- ============================= -->
+
+  <node name="xense_tactile_publisher" pkg="aloha" type="xense_tactile_runner.sh" output="screen">
+    <param name="use_gpu" value="true" />
+    <param name="frame_rate" value="60" />
+    <param name="async_poll_interval_s" value="0.0" />
+    <param name="async_max_frame_age_s" value="0.25" />
+    <!-- Set mock to true to test without real XENSE hardware -->
+    <param name="mock" value="false" />
+  </node>
+
+  <!-- ============================= -->
+  <!-- Combined image monitor        -->
+  <!-- ============================= -->
+
+  <node name="image_monitor" pkg="main_code" type="image_monitor_4cams_4tactile.py" output="screen" />
+
+</launch>
