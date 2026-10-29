@@ -116,6 +116,9 @@ class MultiFeedXenseMonitor:
         img = frame.get("rectify_rgb")
         if img is None:
             img = frame.get("rectify")
+            if img is not None and np.ndim(img) == 3:
+                # Since 2026-10-29 the publisher sends the SDK's native frame, which is BGR.
+                img = np.asarray(img)[:, :, ::-1]
         if img is None:
             raise KeyError("frame has no rectify_rgb or rectify")
 
