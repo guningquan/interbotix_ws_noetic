@@ -23,10 +23,10 @@ CAMERA_FEEDS = [
 CAMERA_TOPIC_BY_NAME = dict(CAMERA_FEEDS)
 
 XENSE_FEEDS = [
-    ("left_fingertip", "/xense/left_fingertip/frame"),
-    ("left_knuckle", "/xense/left_knuckle/frame"),
-    ("right_fingertip", "/xense/right_fingertip/frame"),
-    ("right_knuckle", "/xense/right_knuckle/frame"),
+    ("left_thumb", "/xense/left_thumb/frame"),
+    ("left_forefinger", "/xense/left_forefinger/frame"),
+    ("right_thumb", "/xense/right_thumb/frame"),
+    ("right_forefinger", "/xense/right_forefinger/frame"),
 ]
 
 XENSE_TOPIC_BY_NAME = dict(XENSE_FEEDS)
