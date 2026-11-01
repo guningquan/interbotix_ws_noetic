@@ -16,6 +16,11 @@
   <arg name="monitor_camera_names"              default="cam_high,cam_low,cam_left_wrist,cam_right_wrist"/>
   <arg name="monitor_xense_names"               default="left_thumb,left_forefinger,right_thumb,right_forefinger"/>
   <arg name="monitor_bottom_placeholders"       default="0"/>
+  <!-- tactile_acuity's XENSE publisher (/xense/<sensor>/frame), started here since 2026-10-31
+       so no second terminal is needed, as in the senior's 4arms_tactile_teleop.launch. The sensors
+       must be untouched at launch: it zeroes them once. Set to false to run it by hand. -->
+  <arg name="start_xense_publisher"             default="true"/>
+  <arg name="xense_publisher_args"              default=""/>
 
   <arg name="robot_name_master_left"            value="master_left"/>
   <arg name="robot_name_puppet_left"            value="puppet_left"/>
@@ -141,6 +146,8 @@
     <param name="focus" value="40"/>
     <param name="autoexposure" value="true"/>
   </node>
+  <node if="$(arg start_xense_publisher)" name="xense_publisher" pkg="aloha" type="xense_publisher_tactile_acuity.sh"
+        output="screen" args="$(arg xense_publisher_args)" required="false"/>
   <node name="xense_image_monitor" pkg="main_code" type="image_monitor_4cams_4xense.py" output="screen">
     <param name="camera_names" value="$(arg monitor_camera_names)" />
     <param name="xense_names" value="$(arg monitor_xense_names)" />
