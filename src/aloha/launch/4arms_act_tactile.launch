@@ -14,7 +14,7 @@
   <arg name="launch_driver"                     default="true"/>
   <arg name="use_sim"                           default="false"/>
   <arg name="monitor_camera_names"              default="cam_high,cam_low,cam_left_wrist,cam_right_wrist"/>
-  <arg name="monitor_xense_names"               default="left_thumb,left_forefinger,right_thumb,right_forefinger"/>
+  <arg name="monitor_xense_names"               default="left_gripper_inner,left_gripper_outer,right_gripper_inner,right_gripper_outer"/>
   <arg name="monitor_bottom_placeholders"       default="0"/>
   <!-- tactile_acuity's XENSE publisher (/xense/<sensor>/frame), started here since 2026-10-31
        so no second terminal is needed, as in the senior's 4arms_tactile_teleop.launch. The sensors
@@ -103,6 +103,9 @@
     <param name="pixel_format" value="yuyv" />
     <param name="camera_frame_id" value="usb_cam" />
     <param name="io_method" value="mmap"/>
+    <!-- The recorder and the evaluator take image_raw/compressed (tactile_acuity, 2026-11-08);
+         compressed_image_transport's default is 80, and the recorder refuses any other quality. -->
+    <param name="image_raw/compressed/jpeg_quality" value="90"/>
     <param name="autofocus" value="false"/>
     <param name="focus" value="5"/>
     <param name="autoexposure" value="true"/>
@@ -116,6 +119,9 @@
     <param name="pixel_format" value="yuyv" />
     <param name="camera_frame_id" value="usb_cam" />
     <param name="io_method" value="mmap"/>
+    <!-- The recorder and the evaluator take image_raw/compressed (tactile_acuity, 2026-11-08);
+         compressed_image_transport's default is 80, and the recorder refuses any other quality. -->
+    <param name="image_raw/compressed/jpeg_quality" value="90"/>
     <param name="autofocus" value="false"/>
     <param name="focus" value="35"/>
     <param name="autoexposure" value="true"/>
@@ -129,6 +135,9 @@
     <param name="pixel_format" value="yuyv" />
     <param name="camera_frame_id" value="usb_cam" />
     <param name="io_method" value="mmap"/>
+    <!-- The recorder and the evaluator take image_raw/compressed (tactile_acuity, 2026-11-08);
+         compressed_image_transport's default is 80, and the recorder refuses any other quality. -->
+    <param name="image_raw/compressed/jpeg_quality" value="90"/>
     <param name="autofocus" value="false"/>
     <param name="focus" value="40"/>
     <param name="autoexposure" value="true"/>
@@ -142,6 +151,9 @@
     <param name="pixel_format" value="yuyv" />
     <param name="camera_frame_id" value="usb_cam" />
     <param name="io_method" value="mmap"/>
+    <!-- The recorder and the evaluator take image_raw/compressed (tactile_acuity, 2026-11-08);
+         compressed_image_transport's default is 80, and the recorder refuses any other quality. -->
+    <param name="image_raw/compressed/jpeg_quality" value="90"/>
     <param name="autofocus" value="false"/>
     <param name="focus" value="40"/>
     <param name="autoexposure" value="true"/>
