@@ -39,8 +39,9 @@
                                       is not meant as a data source.
            /tactile/<name>/raw       std_msgs/UInt8MultiArray, data =
                                       pickle.dumps({"frames": {...}, "meta":
-                                      {...}}). Always publishes every
-                                      frame_rate cycle, real-time. "frames"
+                                      {...}}). Sent the moment the SDK delivers
+                                      each new frame (publish_mode arg), at most
+                                      max_rate_hz per sensor. "frames"
                                       always has "<primary>" (same native shape
                                       and dtype/RGB order as above) plus
                                       whatever extra_outputs below selects:
@@ -63,7 +64,26 @@
                                       returned (force/force_norm/mesh3d are
                                       3-channel too, but those channels are
                                       x/y/z, not colours, so they are never
-                                      swapped).
+                                      swapped). With image_codec:=jpeg,
+                                      rectify/difference are JPEG bytes and
+                                      depth is zlib bytes instead (see
+                                      meta["encoding"]).
+                                      "meta": local_read_start/local_read_end
+                                      (host time.time() around the SDK call;
+                                      now - local_read_end = the data's age),
+                                      timestamp (the SDK's TimeStamp for this
+                                      frame), timestamp_source, seq (frames
+                                      read; gaps = frames dropped by the cap),
+                                      image_codec, encoding.
+
+         Tactile, whole node:
+           /tactile/runtime_config   latched std_msgs/UInt8MultiArray, pickled
+                                      dict: every sensor's SDK runtime config
+                                      exported right after the last zeroing,
+                                      the SDK version, and these settings.
+           /tactile/calibrate        std_srvs/Trigger service: re-zero every
+                                      sensor (nothing may touch the gels). The
+                                      recorders call it at every episode start.
 
          Pick the primary output and extras from the command line, e.g.:
            roslaunch aloha 4arms_tactile_teleop.launch primary_output:=depth
@@ -78,7 +98,10 @@
              line per sensor, plus the XENSE SDK's own "infer session using
              GPU"/"using CPU" line (CPU there usually means onnxruntime-gpu's
              CUDA execution provider failed to load - see the LD_LIBRARY_PATH
-             fix in xense_tactile_runner.sh).
+             fix in xense_tactile_runner.sh). Then "runtime config zeroed and
+             exported 4 sensors", and every 60 s a heartbeat per sensor: SDK read
+             time, new frames/s, sent/s (and how many the rate cap dropped);
+             the stats_log_period_s arg changes the interval (0 = off).
            - image_monitor: "Tactile /raw extras this run: ..." - it reads
              xense_tactile_publisher's own primary_output and extra_outputs
              params directly, so this always matches what is actually being
@@ -133,6 +156,29 @@
        400 high): cw (default) or ccw. e.g.:
          roslaunch aloha 4arms_tactile_teleop.launch tactile_rotation:=ccw -->
   <arg name="tactile_rotation"                  default="cw"/>
+
+  <!-- When tactile /raw is sent. on_new_frame (default): each sensor's frame is sent
+       the moment the SDK delivers it, by that sensor's own thread - no timer wait, no
+       duplicate frames. timer: the old behaviour, the newest frame of every sensor
+       re-sent every 1/60 s (kept as a fallback). -->
+  <arg name="publish_mode"                      default="on_new_frame"/>
+  <!-- on_new_frame only: at most this many /raw messages per second per sensor
+       (frames beyond it are dropped, never delayed; 0 = no cap). 60 > the 50 Hz
+       recording loop, so every recorded step gets a fresh frame. -->
+  <arg name="max_rate_hz"                       default="60"/>
+  <!-- How rectify/difference travel in /raw: raw (default, uint8 RGB arrays as
+       before) or jpeg (true-colour JPEG bytes at jpeg_quality; depth then travels
+       zlib-compressed, lossless). Measured 2026-11-08: with all three images on, jpeg
+       messages are ~19x smaller. Subscribers using tactile_stream.py handle both. -->
+  <arg name="image_codec"                       default="raw"/>
+  <arg name="jpeg_quality"                      default="90"/>
+  <!-- Zero every tactile sensor before the first frame is sent (calibrateSensor()).
+       Nothing may touch the gels while the publisher starts. Recorders also re-zero
+       at the start of every episode through the /tactile/calibrate service. -->
+  <arg name="calibrate_on_start"                default="true"/>
+  <!-- Seconds between the publisher's heartbeat lines (per sensor: SDK read time, new
+       frames/s, sent/s); 0 = off. e.g. stats_log_period_s:=5 while comparing settings. -->
+  <arg name="stats_log_period_s"                default="60"/>
 
   <arg name="robot_name_master_left"            value="master_left"/>
   <arg name="robot_name_puppet_left"            value="puppet_left"/>
@@ -269,17 +315,25 @@
 
   <node name="xense_tactile_publisher" pkg="aloha" type="xense_tactile_runner.sh" output="screen">
     <param name="use_gpu" value="true" />
+    <!-- See the publish_mode / max_rate_hz args above. frame_rate is the timer
+         mode's send rate (and the mock mode's frame rate). -->
+    <param name="publish_mode" value="$(arg publish_mode)" />
+    <param name="max_rate_hz" value="$(arg max_rate_hz)" />
     <param name="frame_rate" value="60" />
     <param name="async_poll_interval_s" value="0.0" />
     <param name="async_max_frame_age_s" value="0.25" />
-    <!-- /raw (the full data used for recording) always publishes every frame_rate
-         cycle. /rectify (the monitor preview) only publishes every Nth cycle, e.g.
-         6 means ~10Hz preview at frame_rate=60; it's fine for it to lag. -->
+    <!-- The preview topic (/tactile/<name>/<primary_output>, for image_monitor) is
+         sent once every N /raw messages; it's fine for it to lag. -->
     <param name="preview_every_n_frames" value="2" />
     <!-- See the primary_output arg doc above. image_monitor reads this param too. -->
     <param name="primary_output" value="$(arg primary_output)" />
     <!-- See the extra_outputs arg doc above -->
     <param name="extra_outputs" value="$(arg extra_outputs)" />
+    <!-- See the image_codec / calibrate_on_start args above -->
+    <param name="image_codec" value="$(arg image_codec)" />
+    <param name="jpeg_quality" value="$(arg jpeg_quality)" />
+    <param name="calibrate_on_start" value="$(arg calibrate_on_start)" />
+    <param name="stats_log_period_s" value="$(arg stats_log_period_s)" />
     <!-- Set mock to true to test without real XENSE hardware -->
     <param name="mock" value="false" />
   </node>

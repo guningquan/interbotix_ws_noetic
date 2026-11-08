@@ -10,6 +10,8 @@ To train imitation learning algorithms, you would also need to install [ACT](htt
 - ``config``: a config for each robot, designating the port they should bind to, more details in quick start guide.
 - ``launch``: a ROS launch file for all 4 cameras and all 4 robots.
 - ``aloha_scripts``: python code for teleop and data collection
+- ``scripts``: the XENSE tactile publisher and viewer used by the tactile launch files; see
+  [XENSE tactile sensing](#xense-tactile-sensing) at the end of this file.
 
 ## Quick start guide
 
@@ -177,4 +179,132 @@ To replay the episode collected with real robot, run:
 To lower 4 robots before e.g. cutting off power, run:
 
     python3 sleep.py
+
+
+## XENSE tactile sensing
+
+Four XENSE G1-WS tactile sensors sit on the follower grippers. `scripts/xense_tactile_publisher.py`
+reads them through the XENSE SDK (xensesdk 1.7.0) and publishes them on ROS for the recording, force
+feedback and policy code in act-triple-plus-aloha2. ROS starts it through `scripts/xense_tactile_runner.sh`,
+which runs it in the `lerobot` conda env (`/home/robot/miniforge3/envs/lerobot`, Python 3.10).
+
+| Sensor | Serial |
+| --- | --- |
+| `left_gripper_inner` | OG000707 |
+| `left_gripper_outer` | OG000635 |
+| `right_gripper_inner` | OG000614 |
+| `right_gripper_outer` | OG000706 |
+
+### Launch files
+
+| Launch file | What it starts |
+| --- | --- |
+| `4arms_tactile_teleop.launch` | 4 arms, 4 cameras, the XENSE publisher and the camera + tactile preview window. Use this with act-triple-plus-aloha2. |
+| `4arms_tactile.launch` | 4 cameras and the XENSE publisher, no arm drivers; the publisher runs with its default settings. |
+| `4arms_act_tactile.launch` | 4 arms, 4 cameras and tactile_acuity's own XENSE publisher (`/xense/<sensor>/frame`), for the tactile_acuity code. |
+| `xense_test.launch` | A viewer for one sensor (rectify, difference and depth side by side). Publishes nothing. Do not run it while a publisher is using the sensors. |
+
+### Starting it
+
+```sh
+# Default: rectify + force, sent raw. This is what aloha2 recording and force feedback need.
+roslaunch aloha 4arms_tactile_teleop.launch extra_outputs:=force
+
+# All three images (rectify, difference, depth) + force, sent raw
+roslaunch aloha 4arms_tactile_teleop.launch extra_outputs:=difference,depth,force
+
+# All three images + force; rectify/difference as JPEG (quality 90), depth zlib-compressed (lossless)
+roslaunch aloha 4arms_tactile_teleop.launch extra_outputs:=difference,depth,force image_codec:=jpeg
+```
+
+Add `launch_driver:=false` to start the cameras and sensors without the arm drivers, and
+`stats_log_period_s:=5` to print the frame-rate heartbeat every 5 s while comparing settings.
+
+**Do not touch the gels while the launch starts:** the publisher zeroes every sensor before it sends
+the first frame (`calibrate_on_start:=true`).
+
+### Launch arguments
+
+| Argument | Default | Meaning |
+| --- | --- | --- |
+| `primary_output` | `rectify` | The always-on image: `rectify`, `difference` or `depth`. It is also the image on the preview topic. |
+| `extra_outputs` | empty | Comma-separated extra fields: `difference`, `depth`, `force`, `force_norm`, `force_resultant`, `marker2d`, `mesh3d`, `mesh3d_init`, `mesh3d_flow`, `timestamp`. Force feedback needs `force`. |
+| `publish_mode` | `on_new_frame` | Each sensor's own thread sends every new SDK frame as soon as it is read. `timer` restores the old behaviour: the newest frame of every sensor re-sent every 1/60 s. |
+| `max_rate_hz` | `60` | `on_new_frame` only: at most this many messages per second per sensor. Frames above the cap are dropped, never delayed; 0 = no cap. |
+| `image_codec` | `raw` | `raw`: rectify/difference as RGB uint8 arrays. `jpeg`: as JPEG bytes, with depth zlib-compressed. |
+| `jpeg_quality` | `90` | JPEG quality used with `image_codec:=jpeg`. |
+| `calibrate_on_start` | `true` | Zero every sensor before the first frame. |
+| `stats_log_period_s` | `60` | Seconds between heartbeat lines; 0 = off. |
+| `tactile_rotation` | `cw` | Preview window only (`cw` or `ccw`): turns the portrait 700×400 frames to landscape. The published data is never rotated. |
+| `launch_driver` | `true` | `false` = cameras and tactile sensors only, no arm drivers. |
+
+### Topics
+
+- `/tactile/<sensor>/raw` (`std_msgs/UInt8MultiArray`): `pickle.dumps({"frames": {...}, "meta": {...}})`.
+  This is the topic to record from.
+  - `frames` holds the primary output plus `extra_outputs`, all from one SDK call, so every field is
+    from the same sensor frame. Everything is at native resolution, with no resizing: rectify and
+    difference (700, 400, 3) uint8 RGB, depth (700, 400) float32 in mm, force (35, 20, 3).
+    With `image_codec:=jpeg`, rectify/difference are 1-D uint8 JPEG bytes (`cv2.imdecode` returns BGR)
+    and depth is zlib-compressed float32; `meta["encoding"]` lists the encoded fields.
+  - `meta`: `local_read_start` / `local_read_end` (host `time.time()` around the SDK call, so
+    `now - local_read_end` is the frame's age), `timestamp` (the SDK's own TimeStamp),
+    `timestamp_source`, `seq` (frames read from the SDK; gaps are frames dropped by the cap),
+    `image_codec`, `encoding`.
+- `/tactile/<sensor>/<primary_output>` (`sensor_msgs/Image`): a preview for the monitor window, every
+  2nd sent frame (rgb8, or 32FC1 in mm for depth).
+- `/tactile/runtime_config` (latched): every sensor's SDK runtime config, exported right after the last
+  zeroing, plus the SDK version and the publisher's settings. The recorders store it with each episode.
+- `/tactile/calibrate` (`std_srvs/Trigger`): zero all sensors again. Nothing may touch the gels while
+  it runs. aloha2's recorders call it at the start of every episode.
+
+In act-triple-plus-aloha2, `aloha_scripts/tactile_stream.py` reads `/raw` in both codecs.
+
+### Heartbeat
+
+The publisher prints one line every `stats_log_period_s` seconds:
+
+```text
+xense_tactile_publisher: left_gripper_inner read <ms> ms, new <n>/s, sent <n>/s; left_gripper_outer ...
+```
+
+`read` is the median SDK call time, `new` the number of new frames per second read from the SDK, and
+`sent` the messages per second. `(capped <n>/s)` appears when `max_rate_hz` drops frames. `new` is the
+number to compare between settings. The first line or two include start-up, so read the later ones.
+
+### raw or jpeg?
+
+Measured on this machine on 2026-11-08:
+
+- **rectify + force (the default), raw:** a 50 Hz recording loop got a new frame on 98% of its steps;
+  frame age p50 9 ms, p95 19 ms, max 37 ms. Keep `raw`.
+- **All three images:** about 43 new frames/s per sensor with `raw`, 52–60 with `jpeg`. Each message
+  is about 2.8 MB raw and about 0.15 MB as jpeg. Use `jpeg`.
+- `jpeg` also shrinks what the recorder keeps in RAM during an episode (rectify: 0.84 MB to about
+  28 KB per frame) and removes the JPEG encoding when an episode is saved. The saved HDF5 is the same
+  either way, because aloha2 stores tactile images as JPEG quality 90.
+
+### Cameras
+
+`usb_cam` publishes raw `image_raw` (rgb8, 640×480, 0.92 MB per frame). Keep the cameras raw when the
+program reading them runs on this PC. Measured with all cameras and sensors running, sending them
+compressed (ROS `image_raw/compressed`, JPEG quality 90) instead:
+
+| | raw | compressed (q90) |
+| --- | --- | --- |
+| Size per frame | 0.92 MB | 0.07 MB |
+| Latency p50 / p95 / max | 1.9 / 5.4 / 30 ms | 3.7 / 6.2 / 36 ms |
+| Decoding at the receiver | none | 1.4 ms per frame |
+| CPU of the 4 camera nodes | 28% | 96% |
+
+Compress only to send images to another machine. The compressed topic is produced only while something
+subscribes to it, and its quality defaults to 80. To set 90:
+
+```sh
+for c in high low left_wrist right_wrist; do
+  rosrun dynamic_reconfigure dynparam set /usb_cam_$c/image_raw/compressed jpeg_quality 90
+done
+```
+
+aloha2's recorders read `image_raw` only.
 
